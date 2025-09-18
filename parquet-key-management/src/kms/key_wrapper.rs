@@ -1,4 +1,4 @@
-use crate::configuration::EncryptionConfiguration;
+use crate::config::EncryptionConfiguration;
 use crate::key_encryption::encrypt_encryption_key;
 use crate::key_material::KeyMaterialBuilder;
 use crate::kms::kms_manager::{KekWriteCache, KeyEncryptionKey, KmsManager};

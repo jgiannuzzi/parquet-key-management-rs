@@ -5,7 +5,7 @@ use crate::async_kms::key_unwrapper::KeyUnwrapper;
 use crate::async_kms::key_wrapper::KeyWrapper;
 use crate::async_kms::kms_manager::KmsManager;
 use crate::async_kms::{KmsClientFactory, KmsConnectionConfig};
-use crate::configuration::{DecryptionConfiguration, EncryptionConfiguration};
+use crate::config::{DecryptionConfiguration, EncryptionConfiguration};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
@@ -28,7 +28,7 @@ use std::sync::Arc;
 /// when writing an encrypted Parquet file:
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use parquet_key_management::configuration::EncryptionConfiguration;
+/// # use parquet_key_management::config::EncryptionConfiguration;
 /// # use parquet_key_management::async_crypto_factory::CryptoFactory;
 /// # use parquet_key_management::async_kms::KmsConnectionConfig;
 /// # futures::executor::block_on(async {
@@ -44,7 +44,7 @@ use std::sync::Arc;
 /// And file decryption properties can be constructed for reading an encrypted file:
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use parquet_key_management::configuration::DecryptionConfiguration;
+/// # use parquet_key_management::config::DecryptionConfiguration;
 /// # use parquet_key_management::async_crypto_factory::CryptoFactory;
 /// # use parquet_key_management::async_kms::KmsConnectionConfig;
 /// # futures::executor::block_on(async {
@@ -188,7 +188,7 @@ impl EncryptionKey {
 mod tests {
     use super::*;
     use crate::async_kms::test::{KmsConnectionConfigDetails, TestKmsClientFactory};
-    use crate::configuration::EncryptionConfigurationBuilder;
+    use crate::config::EncryptionConfigurationBuilder;
     use crate::key_material::KeyMaterialBuilder;
     use parquet::data_type::AsBytes;
     use std::collections::HashMap;

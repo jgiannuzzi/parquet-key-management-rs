@@ -1,7 +1,7 @@
 //! The key-management tools API for building file encryption and decryption properties
 //! that work with a Key Management Server.
 
-use crate::configuration::{DecryptionConfiguration, EncryptionConfiguration};
+use crate::config::{DecryptionConfiguration, EncryptionConfiguration};
 use crate::kms::key_unwrapper::KeyUnwrapper;
 use crate::kms::key_wrapper::KeyWrapper;
 use crate::kms::kms_manager::KmsManager;
@@ -28,7 +28,7 @@ use std::sync::Arc;
 /// when writing an encrypted Parquet file:
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use parquet_key_management::configuration::EncryptionConfiguration;
+/// # use parquet_key_management::config::EncryptionConfiguration;
 /// # use parquet_key_management::crypto_factory::CryptoFactory;
 /// # use parquet_key_management::kms::KmsConnectionConfig;
 /// # let crypto_factory: CryptoFactory = todo!();
@@ -42,7 +42,7 @@ use std::sync::Arc;
 /// And file decryption properties can be constructed for reading an encrypted file:
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use parquet_key_management::configuration::DecryptionConfiguration;
+/// # use parquet_key_management::config::DecryptionConfiguration;
 /// # use parquet_key_management::crypto_factory::CryptoFactory;
 /// # use parquet_key_management::kms::KmsConnectionConfig;
 /// # let crypto_factory: CryptoFactory = todo!();
@@ -174,7 +174,7 @@ impl EncryptionKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configuration::EncryptionConfigurationBuilder;
+    use crate::config::EncryptionConfigurationBuilder;
     use crate::key_material::KeyMaterialBuilder;
     use crate::kms::test::{KmsConnectionConfigDetails, TestKmsClientFactory};
     use parquet::data_type::AsBytes;

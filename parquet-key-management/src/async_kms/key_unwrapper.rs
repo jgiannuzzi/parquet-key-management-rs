@@ -1,6 +1,6 @@
 use crate::async_kms::kms_manager::{KekReadCache, KmsManager};
 use crate::async_kms::KmsConnectionConfig;
-use crate::configuration::DecryptionConfiguration;
+use crate::config::DecryptionConfiguration;
 use crate::key_encryption;
 use crate::key_material::KeyMaterial;
 use base64::prelude::BASE64_STANDARD;

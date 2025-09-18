@@ -31,7 +31,7 @@
 //! use base64::Engine;
 //! use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 //! use parquet::arrow::ArrowWriter;
-//! use parquet_key_management::configuration::{
+//! use parquet_key_management::config::{
 //!     DecryptionConfiguration, EncryptionConfigurationBuilder,
 //! };
 //! use parquet_key_management::crypto_factory::CryptoFactory;
@@ -197,7 +197,7 @@
 pub mod async_crypto_factory;
 #[cfg(feature = "async")]
 pub mod async_kms;
-pub mod configuration;
+pub mod config;
 pub mod crypto_factory;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
