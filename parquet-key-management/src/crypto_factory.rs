@@ -1,10 +1,10 @@
 //! The key-management tools API for building file encryption and decryption properties
 //! that work with a Key Management Server.
 
-use crate::key_unwrapper::KeyUnwrapper;
-use crate::key_wrapper::KeyWrapper;
+use crate::kms::key_unwrapper::KeyUnwrapper;
+use crate::kms::key_wrapper::KeyWrapper;
+use crate::kms::kms_manager::KmsManager;
 use crate::kms::{KmsClientFactory, KmsConnectionConfig};
-use crate::kms_manager::KmsManager;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
@@ -375,7 +375,7 @@ impl CryptoFactory {
     }
 
     #[cfg(test)]
-    pub(crate) fn cache_stats(&self) -> crate::kms_manager::CacheStats {
+    pub(crate) fn cache_stats(&self) -> crate::kms::kms_manager::CacheStats {
         self.kms_manager.cache_stats()
     }
 }
@@ -439,7 +439,7 @@ mod tests {
     }
 
     fn test_kms_client_caching(cache_lifetime: Option<Duration>) {
-        let _time_controller = crate::kms_manager::mock_time::time_controller();
+        let _time_controller = crate::kms::kms_manager::mock_time::time_controller();
 
         let kms_config = Arc::new(KmsConnectionConfig::default());
         let config = DecryptionConfiguration::builder()
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_kms_client_expiration() {
-        let time_controller = crate::kms_manager::mock_time::time_controller();
+        let time_controller = crate::kms::kms_manager::mock_time::time_controller();
 
         let kms_config = Arc::new(KmsConnectionConfig::default());
         let config = DecryptionConfiguration::builder()
@@ -621,7 +621,7 @@ mod tests {
     }
 
     fn round_trip_encryption_properties(double_wrapping: bool) {
-        let _time_controller = crate::kms_manager::mock_time::time_controller();
+        let _time_controller = crate::kms::kms_manager::mock_time::time_controller();
 
         let kms_config = Arc::new(
             KmsConnectionConfig::builder()
@@ -693,7 +693,7 @@ mod tests {
     /// Test caching of key encryption keys when decrypting files
     #[test]
     fn test_decryption_key_encryption_key_caching() {
-        let time_controller = crate::kms_manager::mock_time::time_controller();
+        let time_controller = crate::kms::kms_manager::mock_time::time_controller();
 
         let kms_config = Arc::new(KmsConnectionConfig::default());
         let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
@@ -784,7 +784,7 @@ mod tests {
     /// Test caching of key encryption keys when encrypting files
     #[test]
     fn test_encryption_key_encryption_key_caching() {
-        let time_controller = crate::kms_manager::mock_time::time_controller();
+        let time_controller = crate::kms::kms_manager::mock_time::time_controller();
 
         let kms_config = Arc::new(KmsConnectionConfig::default());
         let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())

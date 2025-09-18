@@ -197,10 +197,7 @@ pub mod crypto_factory;
 pub mod datafusion;
 mod key_encryption;
 pub mod key_material;
-mod key_unwrapper;
-mod key_wrapper;
 pub mod kms;
-mod kms_manager;
 #[cfg(any(test, feature = "_test_utils"))]
 #[doc(hidden)]
 pub mod test_kms;
