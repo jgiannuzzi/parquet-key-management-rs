@@ -20,6 +20,8 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 datafusion-execution = { version = "50.0", default-features = false, features = ["parquet_encryption"], optional = true }
 datafusion-common = { version = "50.0", default-features = false, features = ["parquet", "parquet_encryption"], optional = true }
 object_store = { version = "0.12.2", default-features = false, optional = true }
+futures = { version = "0.3", default-features = false, optional = true }
+tokio = { version = "1.0", optional = true, default-features = false }
 
 [dev-dependencies]
 arrow = { workspace = true }
@@ -28,11 +30,11 @@ datafusion = { version = "50.0", default-features = false, features = ["parquet"
 parquet = { workspace = true, features = ["arrow"] }
 tempfile = { workspace = true }
 tokio = { version = "1.46", features = ["macros", "rt", "sync"] }
-futures = { version = "0.3" }
 
 [features]
 default = []
 datafusion = ["dep:datafusion-execution", "dep:datafusion-common", "dep:object_store"]
+async = ["parquet/async", "dep:futures", "tokio/sync"]
 _test_utils = []
 
 [[test]]
