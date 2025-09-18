@@ -5,9 +5,8 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
-use parquet_key_management::crypto_factory::{
-    CryptoFactory, DecryptionConfiguration, EncryptionConfiguration,
-};
+use parquet_key_management::configuration::{DecryptionConfiguration, EncryptionConfiguration};
+use parquet_key_management::crypto_factory::CryptoFactory;
 use parquet_key_management::kms::test::TestKmsClientFactory;
 use parquet_key_management::kms::KmsConnectionConfig;
 use std::fs::File;

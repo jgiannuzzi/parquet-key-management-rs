@@ -1,4 +1,4 @@
-use crate::crypto_factory::DecryptionConfiguration;
+use crate::configuration::DecryptionConfiguration;
 use crate::key_encryption;
 use crate::key_material::KeyMaterial;
 use crate::kms::kms_manager::{KekReadCache, KmsManager};

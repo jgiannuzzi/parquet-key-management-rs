@@ -1,6 +1,7 @@
 //! The key-management tools API for building file encryption and decryption properties
 //! that work with a Key Management Server.
 
+use crate::configuration::{DecryptionConfiguration, EncryptionConfiguration};
 use crate::kms::key_unwrapper::KeyUnwrapper;
 use crate::kms::key_wrapper::KeyWrapper;
 use crate::kms::kms_manager::KmsManager;
@@ -9,230 +10,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
 use ring::rand::{SecureRandom, SystemRandom};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-
-/// Configuration for encrypting a Parquet file using a KMS
-#[derive(Clone, Debug)]
-pub struct EncryptionConfiguration {
-    footer_key_id: String,
-    column_key_ids: HashMap<String, Vec<String>>,
-    plaintext_footer: bool,
-    double_wrapping: bool,
-    cache_lifetime: Option<Duration>,
-    internal_key_material: bool,
-    data_key_length_bits: u32,
-}
-
-impl EncryptionConfiguration {
-    /// Create a new builder for an [`EncryptionConfiguration`] using the specified
-    /// master key identifier for footer encryption.
-    pub fn builder(footer_key_id: String) -> EncryptionConfigurationBuilder {
-        EncryptionConfigurationBuilder::new(footer_key_id)
-    }
-
-    /// Master key identifier for footer key encryption or signing
-    pub fn footer_key_id(&self) -> &str {
-        &self.footer_key_id
-    }
-
-    /// Map from master key identifiers to the names of columns encrypted with the key
-    pub fn column_key_ids(&self) -> &HashMap<String, Vec<String>> {
-        &self.column_key_ids
-    }
-
-    /// Whether to write the footer in plaintext.
-    pub fn plaintext_footer(&self) -> bool {
-        self.plaintext_footer
-    }
-
-    /// Whether to use double wrapping, where data encryption keys (DEKs) are wrapped
-    /// with key encryption keys (KEKs), which are then wrapped with the KMS.
-    /// This allows reducing interactions with the KMS.
-    pub fn double_wrapping(&self) -> bool {
-        self.double_wrapping
-    }
-
-    /// How long to cache objects for, including decrypted key encryption keys
-    /// and KMS clients. When None, clients are cached indefinitely.
-    pub fn cache_lifetime(&self) -> Option<Duration> {
-        self.cache_lifetime
-    }
-
-    /// Whether to store encryption key material inside Parquet file metadata,
-    /// rather than in external JSON files.
-    /// Using external key material allows for re-wrapping of data keys after
-    /// rotation of master keys in the KMS.
-    /// Currently only internal key material is implemented.
-    pub fn internal_key_material(&self) -> bool {
-        self.internal_key_material
-    }
-
-    /// Number of bits for randomly generated data encryption keys.
-    /// Currently only 128-bit keys are implemented.
-    pub fn data_key_length_bits(&self) -> u32 {
-        self.data_key_length_bits
-    }
-}
-
-/// Builder for a Parquet [`EncryptionConfiguration`].
-pub struct EncryptionConfigurationBuilder {
-    footer_key_id: String,
-    column_key_ids: HashMap<String, Vec<String>>,
-    plaintext_footer: bool,
-    double_wrapping: bool,
-    cache_lifetime: Option<Duration>,
-    internal_key_material: bool,
-    data_key_length_bits: u32,
-}
-
-impl EncryptionConfigurationBuilder {
-    /// Create a new [`EncryptionConfigurationBuilder`] using the specified master key
-    /// identifier for footer encryption and default values for other options.
-    pub fn new(footer_key_id: String) -> Self {
-        Self {
-            footer_key_id,
-            column_key_ids: Default::default(),
-            plaintext_footer: false,
-            double_wrapping: true,
-            cache_lifetime: Some(Duration::from_secs(600)),
-            internal_key_material: true,
-            data_key_length_bits: 128,
-        }
-    }
-
-    /// Finalizes the encryption configuration to be used
-    pub fn build(self) -> Result<EncryptionConfiguration> {
-        let mut seen_columns = HashMap::new();
-        for (master_key_id, columns) in self.column_key_ids.iter() {
-            for col_name in columns.iter() {
-                let prev_id = seen_columns.insert(col_name.clone(), master_key_id.clone());
-                match prev_id {
-                    Some(prev_id) if &prev_id == master_key_id => {
-                        return Err(ParquetError::General(format!(
-                            "Invalid encryption configuration. \
-                            Column '{col_name}' is repeated multiple times for master key id \
-                            '{master_key_id}'"
-                        )));
-                    }
-                    Some(prev_id) => {
-                        return Err(ParquetError::General(format!(
-                            "Invalid encryption configuration. \
-                            Column '{col_name}' is configured to use multiple master key ids: \
-                            '{master_key_id}' and '{prev_id}'"
-                        )));
-                    }
-                    None => {}
-                }
-            }
-        }
-
-        Ok(EncryptionConfiguration {
-            footer_key_id: self.footer_key_id,
-            column_key_ids: self.column_key_ids,
-            plaintext_footer: self.plaintext_footer,
-            double_wrapping: self.double_wrapping,
-            cache_lifetime: self.cache_lifetime,
-            internal_key_material: self.internal_key_material,
-            data_key_length_bits: self.data_key_length_bits,
-        })
-    }
-
-    /// Specify a column master key identifier and the column names to be encrypted with this key.
-    /// Note that if no column keys are specified, uniform encryption is used where all columns
-    /// are encrypted with the footer key.
-    pub fn add_column_key(mut self, master_key_id: String, column_paths: Vec<String>) -> Self {
-        self.column_key_ids
-            .entry(master_key_id)
-            .or_default()
-            .extend(column_paths);
-        self
-    }
-
-    /// Set whether to write the footer in plaintext.
-    /// Defaults to false.
-    pub fn set_plaintext_footer(mut self, plaintext_footer: bool) -> Self {
-        self.plaintext_footer = plaintext_footer;
-        self
-    }
-
-    /// Set whether to use double wrapping, where data encryption keys (DEKs) are wrapped
-    /// with key encryption keys (KEKs), which are then wrapped with the KMS.
-    /// This allows reducing interactions with the KMS.
-    /// Defaults to True.
-    pub fn set_double_wrapping(mut self, double_wrapping: bool) -> Self {
-        self.double_wrapping = double_wrapping;
-        self
-    }
-
-    /// Set how long to cache objects for, including decrypted key encryption keys
-    /// and KMS clients. When None, clients are cached indefinitely.
-    /// Defaults to 10 minutes.
-    pub fn set_cache_lifetime(mut self, lifetime: Option<Duration>) -> Self {
-        self.cache_lifetime = lifetime;
-        self
-    }
-}
-
-/// Configuration for decrypting a Parquet file using a KMS
-#[derive(Clone, Debug)]
-pub struct DecryptionConfiguration {
-    cache_lifetime: Option<Duration>,
-}
-
-impl DecryptionConfiguration {
-    /// Create a new builder for a [`DecryptionConfiguration`]
-    pub fn builder() -> DecryptionConfigurationBuilder {
-        DecryptionConfigurationBuilder::default()
-    }
-
-    /// How long to cache objects for, including decrypted key encryption keys
-    /// and KMS clients. When None, objects are cached indefinitely.
-    pub fn cache_lifetime(&self) -> Option<Duration> {
-        self.cache_lifetime
-    }
-}
-
-impl Default for DecryptionConfiguration {
-    fn default() -> Self {
-        DecryptionConfigurationBuilder::default().build()
-    }
-}
-
-/// Builder for a Parquet [`DecryptionConfiguration`].
-pub struct DecryptionConfigurationBuilder {
-    cache_lifetime: Option<Duration>,
-}
-
-impl DecryptionConfigurationBuilder {
-    /// Create a new [`DecryptionConfigurationBuilder`] with default options
-    pub fn new() -> Self {
-        Self {
-            cache_lifetime: Some(Duration::from_secs(600)),
-        }
-    }
-
-    /// Finalizes the decryption configuration to be used
-    pub fn build(self) -> DecryptionConfiguration {
-        DecryptionConfiguration {
-            cache_lifetime: self.cache_lifetime,
-        }
-    }
-
-    /// Set how long to cache objects for, including decrypted key encryption keys
-    /// and KMS clients. When None, objects are cached indefinitely.
-    pub fn set_cache_lifetime(mut self, cache_lifetime: Option<Duration>) -> Self {
-        self.cache_lifetime = cache_lifetime;
-        self
-    }
-}
-
-impl Default for DecryptionConfigurationBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// A factory that produces file decryption and encryption properties using
 /// configuration options and a KMS client
@@ -250,7 +28,8 @@ impl Default for DecryptionConfigurationBuilder {
 /// when writing an encrypted Parquet file:
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use parquet_key_management::crypto_factory::{CryptoFactory, EncryptionConfiguration};
+/// # use parquet_key_management::configuration::EncryptionConfiguration;
+/// # use parquet_key_management::crypto_factory::CryptoFactory;
 /// # use parquet_key_management::kms::KmsConnectionConfig;
 /// # let crypto_factory: CryptoFactory = todo!();
 /// let kms_connection_config = Arc::new(KmsConnectionConfig::default());
@@ -263,7 +42,8 @@ impl Default for DecryptionConfigurationBuilder {
 /// And file decryption properties can be constructed for reading an encrypted file:
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use parquet_key_management::crypto_factory::{CryptoFactory, DecryptionConfiguration};
+/// # use parquet_key_management::configuration::DecryptionConfiguration;
+/// # use parquet_key_management::crypto_factory::CryptoFactory;
 /// # use parquet_key_management::kms::KmsConnectionConfig;
 /// # let crypto_factory: CryptoFactory = todo!();
 /// # let kms_connection_config = Arc::new(KmsConnectionConfig::default());
@@ -317,12 +97,12 @@ impl CryptoFactory {
         kms_connection_config: Arc<KmsConnectionConfig>,
         encryption_configuration: &EncryptionConfiguration,
     ) -> Result<FileEncryptionProperties> {
-        if !encryption_configuration.internal_key_material {
+        if !encryption_configuration.internal_key_material() {
             return Err(ParquetError::NYI(
                 "External key material is not yet implemented".to_owned(),
             ));
         }
-        if encryption_configuration.data_key_length_bits != 128 {
+        if encryption_configuration.data_key_length_bits() != 128 {
             return Err(ParquetError::NYI(
                 "Only 128 bit data keys are currently implemented".to_owned(),
             ));
@@ -342,9 +122,9 @@ impl CryptoFactory {
 
         let mut builder = FileEncryptionProperties::builder(footer_key.key)
             .with_footer_key_metadata(footer_key.metadata)
-            .with_plaintext_footer(encryption_configuration.plaintext_footer);
+            .with_plaintext_footer(encryption_configuration.plaintext_footer());
 
-        for (master_key_id, column_paths) in &encryption_configuration.column_key_ids {
+        for (master_key_id, column_paths) in encryption_configuration.column_key_ids() {
             for column_path in column_paths {
                 let column_key = self.generate_key(master_key_id, false, &mut key_wrapper)?;
                 builder = builder.with_column_key_and_metadata(
@@ -394,9 +174,12 @@ impl EncryptionKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::configuration::EncryptionConfigurationBuilder;
     use crate::key_material::KeyMaterialBuilder;
     use crate::kms::test::{KmsConnectionConfigDetails, TestKmsClientFactory};
     use parquet::data_type::AsBytes;
+    use std::collections::HashMap;
+    use std::time::Duration;
 
     #[test]
     fn test_file_decryption_properties() {
@@ -877,33 +660,6 @@ mod tests {
         assert_eq!(details.key_access_token, "secret_2");
         let expected_conf = HashMap::from([("test_key".to_owned(), "test_value_2".to_owned())]);
         assert_eq!(details.custom_kms_conf, expected_conf);
-    }
-
-    #[test]
-    fn encryption_configuration_with_conflicting_column() {
-        let builder = EncryptionConfigurationBuilder::new("kf".to_owned())
-            .add_column_key("kc1".to_owned(), vec!["x0".to_owned(), "x1".to_owned()])
-            .add_column_key("kc2".to_owned(), vec!["x2".to_owned(), "x1".to_owned()]);
-
-        let build_result = builder.build();
-        assert!(build_result.is_err());
-        let error_message = build_result.unwrap_err().to_string();
-        assert!(error_message.contains("Invalid encryption configuration. Column 'x1' is configured to use multiple master key ids: "));
-        assert!(error_message.contains("'kc1'"));
-        assert!(error_message.contains("'kc2'"));
-    }
-
-    #[test]
-    fn encryption_configuration_with_repeated_column() {
-        let builder = EncryptionConfigurationBuilder::new("kf".to_owned()).add_column_key(
-            "kc1".to_owned(),
-            vec!["x0".to_owned(), "x1".to_owned(), "x1".to_owned()],
-        );
-
-        let build_result = builder.build();
-        assert!(build_result.is_err());
-        let error_message = build_result.unwrap_err().to_string();
-        assert!(error_message.contains("Invalid encryption configuration. Column 'x1' is repeated multiple times for master key id 'kc1'"));
     }
 
     fn get_kms_connection_config_for_decryption(

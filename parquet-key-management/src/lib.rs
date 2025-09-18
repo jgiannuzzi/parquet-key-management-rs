@@ -31,9 +31,10 @@
 //! use base64::Engine;
 //! use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 //! use parquet::arrow::ArrowWriter;
-//! use parquet_key_management::crypto_factory::{
-//!     CryptoFactory, DecryptionConfiguration, EncryptionConfigurationBuilder,
+//! use parquet_key_management::configuration::{
+//!     DecryptionConfiguration, EncryptionConfigurationBuilder,
 //! };
+//! use parquet_key_management::crypto_factory::CryptoFactory;
 //! use parquet_key_management::kms::{KmsClient, KmsConnectionConfig};
 //! use parquet::errors::{ParquetError, Result};
 //! use parquet::file::properties::WriterProperties;
@@ -192,6 +193,7 @@
 //! # Ok::<(), parquet::errors::ParquetError>(())
 //! ```
 
+pub mod configuration;
 pub mod crypto_factory;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;

@@ -3,7 +3,8 @@
 use arrow_array::RecordBatch;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::errors::Result;
-use parquet_key_management::crypto_factory::{CryptoFactory, DecryptionConfiguration};
+use parquet_key_management::configuration::DecryptionConfiguration;
+use parquet_key_management::crypto_factory::CryptoFactory;
 use parquet_key_management::kms::test::TestKmsClientFactory;
 use parquet_key_management::kms::KmsConnectionConfig;
 use std::env;
