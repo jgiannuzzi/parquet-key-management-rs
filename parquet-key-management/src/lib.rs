@@ -198,6 +198,3 @@ pub mod datafusion;
 mod key_encryption;
 pub mod key_material;
 pub mod kms;
-#[cfg(any(test, feature = "_test_utils"))]
-#[doc(hidden)]
-pub mod test_kms;

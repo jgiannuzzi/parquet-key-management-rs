@@ -395,7 +395,7 @@ impl EncryptionKey {
 mod tests {
     use super::*;
     use crate::key_material::KeyMaterialBuilder;
-    use crate::test_kms::{KmsConnectionConfigDetails, TestKmsClientFactory};
+    use crate::kms::test::{KmsConnectionConfigDetails, TestKmsClientFactory};
     use parquet::data_type::AsBytes;
 
     #[test]

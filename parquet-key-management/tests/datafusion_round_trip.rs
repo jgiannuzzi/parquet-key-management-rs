@@ -11,8 +11,8 @@ use parquet_key_management::crypto_factory::{
     CryptoFactory, DecryptionConfiguration, EncryptionConfiguration,
 };
 use parquet_key_management::datafusion::{KmsEncryptionFactory, KmsEncryptionFactoryOptions};
+use parquet_key_management::kms::test::TestKmsClientFactory;
 use parquet_key_management::kms::KmsConnectionConfig;
-use parquet_key_management::test_kms::TestKmsClientFactory;
 use std::fs::File;
 use std::sync::Arc;
 use tempfile::TempDir;
