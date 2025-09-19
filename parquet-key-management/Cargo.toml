@@ -17,8 +17,8 @@ parquet = { workspace = true }
 ring = { version = "0.17", default-features = false, features = ["std"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
-datafusion-execution = { version = "50.0", default-features = false, features = ["parquet_encryption"], optional = true }
-datafusion-common = { version = "50.0", default-features = false, features = ["parquet", "parquet_encryption"], optional = true }
+datafusion-execution = { path = "../../../apache/datafusion/datafusion/execution", version = "50.0", default-features = false, features = ["parquet_encryption"], optional = true }
+datafusion-common = { path = "../../../apache/datafusion/datafusion/common", version = "50.0", default-features = false, features = ["parquet", "parquet_encryption"], optional = true }
 object_store = { version = "0.12.2", default-features = false, optional = true }
 futures = { version = "0.3", default-features = false, optional = true }
 tokio = { version = "1.0", optional = true, default-features = false }
@@ -26,15 +26,15 @@ tokio = { version = "1.0", optional = true, default-features = false }
 [dev-dependencies]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
-datafusion = { version = "50.0", default-features = false, features = ["parquet", "parquet_encryption"] }
+datafusion = { path = "../../../apache/datafusion/datafusion/core", version = "50.0", default-features = false, features = ["parquet", "parquet_encryption"] }
 parquet = { workspace = true, features = ["arrow"] }
 tempfile = { workspace = true }
-tokio = { version = "1.46", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.46", features = ["fs", "macros", "rt", "sync"] }
 
 [features]
 default = []
-datafusion = ["dep:datafusion-execution", "dep:datafusion-common", "dep:object_store"]
-async = ["parquet/async", "dep:futures", "tokio/sync"]
+async = ["dep:futures", "parquet/async", "tokio/sync"]
+datafusion = ["async", "dep:datafusion-execution", "dep:datafusion-common", "dep:object_store"]
 _test_utils = []
 
 [[test]]
