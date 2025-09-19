@@ -42,6 +42,10 @@ name = "round_trip"
 required-features = ["_test_utils"]
 
 [[test]]
+name = "async_round_trip"
+required-features = ["_test_utils", "async"]
+
+[[test]]
 name = "integration_tests"
 required-features = ["_test_utils"]
 
