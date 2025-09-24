@@ -7,6 +7,7 @@ pub(crate) mod kms_manager;
 #[doc(hidden)]
 pub mod test;
 
+use futures::future::BoxFuture;
 use parquet::errors::Result;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -187,12 +188,12 @@ where
 #[async_trait::async_trait]
 impl<T> KmsClientFactory for T
 where
-    T: Fn(&KmsConnectionConfig) -> Result<KmsClientRef> + Send + Sync + 'static,
+    T: Fn(&KmsConnectionConfig) -> BoxFuture<Result<KmsClientRef>> + Send + Sync + 'static,
 {
     async fn create_client(
         &self,
         kms_connection_config: &KmsConnectionConfig,
     ) -> Result<KmsClientRef> {
-        self(kms_connection_config)
+        self(kms_connection_config).await
     }
 }

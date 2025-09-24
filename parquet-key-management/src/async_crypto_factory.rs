@@ -18,9 +18,13 @@ use std::sync::Arc;
 /// Creating a `CryptoFactory` requires providing a [`KmsClientFactory`]
 /// to create clients for your Key Management Server:
 /// ```no_run
+/// # use futures::future::BoxFuture;
+/// # use parquet::errors::Result;
 /// # use parquet_key_management::async_crypto_factory::CryptoFactory;
-/// # use parquet_key_management::async_kms::KmsConnectionConfig;
-/// # let kms_client_factory = |config: &KmsConnectionConfig| todo!();
+/// # use parquet_key_management::async_kms::{KmsConnectionConfig, KmsClientRef};
+/// # fn kms_client_factory(_: &KmsConnectionConfig) -> BoxFuture<'_, Result<KmsClientRef>> {
+/// #     todo!()
+/// # }
 /// let crypto_factory = CryptoFactory::new(kms_client_factory);
 /// ```
 ///
