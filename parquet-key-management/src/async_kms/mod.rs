@@ -1,4 +1,5 @@
 //! Types for integrating with a Key Management Server to use with Parquet Modular Encryption
+//! in an asynchronous context.
 
 pub(crate) mod key_unwrapper;
 pub(crate) mod key_wrapper;
