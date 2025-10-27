@@ -27,7 +27,7 @@ arrow-array = { workspace = true }
 datafusion = { version = "50.0", default-features = false, features = ["parquet", "parquet_encryption"] }
 parquet = { workspace = true, features = ["arrow"] }
 tempfile = { workspace = true }
-tokio = { version = "1.46", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.46", features = ["fs", "macros", "rt-multi-thread", "sync"] }
 futures = { version = "0.3" }
 
 [features]
@@ -37,6 +37,10 @@ _test_utils = []
 
 [[test]]
 name = "round_trip"
+required-features = ["_test_utils"]
+
+[[test]]
+name = "async_round_trip"
 required-features = ["_test_utils"]
 
 [[test]]
