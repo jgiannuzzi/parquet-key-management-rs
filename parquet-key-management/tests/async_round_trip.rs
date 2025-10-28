@@ -1,4 +1,5 @@
 use arrow_array::{ArrayRef, Float32Array, Int32Array, RecordBatch};
+use futures::future::BoxFuture;
 use futures::task::{Spawn, SpawnExt};
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
@@ -14,6 +15,7 @@ use parquet_key_management::kms::{KmsClient, KmsClientFactory, KmsClientRef, Kms
 use parquet_key_management::test_kms::TestKmsClientFactory;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -35,6 +37,42 @@ pub trait AsyncKmsClient: Send + Sync {
 }
 
 pub type AsyncKmsClientRef = Arc<dyn AsyncKmsClient>;
+
+/// Trait for factories that create KMS clients
+#[async_trait::async_trait]
+pub trait AsyncKmsClientFactory: Send + Sync {
+    /// Create a new [`KmsClient`] instance using the provided configuration
+    async fn create_client(
+        &self,
+        kms_connection_config: &KmsConnectionConfig,
+    ) -> Result<AsyncKmsClientRef>;
+}
+
+#[async_trait::async_trait]
+impl<T> AsyncKmsClientFactory for Arc<T>
+where
+    T: AsyncKmsClientFactory,
+{
+    async fn create_client(
+        &self,
+        kms_connection_config: &KmsConnectionConfig,
+    ) -> Result<AsyncKmsClientRef> {
+        self.deref().create_client(kms_connection_config).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<T> AsyncKmsClientFactory for T
+where
+    T: Fn(&KmsConnectionConfig) -> BoxFuture<Result<AsyncKmsClientRef>> + Send + Sync + 'static,
+{
+    async fn create_client(
+        &self,
+        kms_connection_config: &KmsConnectionConfig,
+    ) -> Result<AsyncKmsClientRef> {
+        self(kms_connection_config).await
+    }
+}
 
 /*
  * Bridge KMS client implementation
@@ -143,6 +181,93 @@ where
 }
 
 /*
+ * Bridge KMS client factory implementation
+ */
+
+enum AsyncKmsClientFactoryCommand {
+    CreateClient {
+        config: KmsConnectionConfig,
+        respond_to: mpsc::Sender<Result<KmsClientRef>>,
+    },
+}
+
+struct BridgeKmsClientFactory<S: Spawn, T: AsyncKmsClientFactory> {
+    sender: tokio::sync::mpsc::UnboundedSender<AsyncKmsClientFactoryCommand>,
+    _marker_s: PhantomData<S>,
+    _marker_t: PhantomData<T>,
+}
+
+impl<S, T> BridgeKmsClientFactory<S, T>
+where
+    S: Spawn + Clone + Send + Sync + 'static,
+    T: AsyncKmsClientFactory + 'static,
+{
+    fn new(spawner: S, inner: T) -> Self {
+        let (sender, mut receiver) =
+            tokio::sync::mpsc::unbounded_channel::<AsyncKmsClientFactoryCommand>();
+
+        let inner = Arc::new(inner);
+
+        spawner
+            .clone()
+            .spawn(async move {
+                while let Some(cmd) = receiver.recv().await {
+                    let inner = inner.clone();
+                    let spawner = spawner.clone();
+                    spawner
+                        .clone()
+                        .spawn(async move {
+                            match cmd {
+                                AsyncKmsClientFactoryCommand::CreateClient {
+                                    config,
+                                    respond_to,
+                                } => {
+                                    let result = async {
+                                        let client = inner.create_client(&config).await?;
+                                        let bridge_client = BridgeKmsClient::new(spawner, client);
+                                        Ok(Arc::new(bridge_client) as KmsClientRef)
+                                    }
+                                    .await;
+                                    let _ = respond_to.send(result);
+                                }
+                            }
+                        })
+                        .expect("Failed to spawn KMS factory command task");
+                }
+            })
+            .expect("Failed to spawn KMS client factory task");
+
+        Self {
+            sender,
+            _marker_s: PhantomData,
+            _marker_t: PhantomData,
+        }
+    }
+}
+
+impl<S, T> KmsClientFactory for BridgeKmsClientFactory<S, T>
+where
+    S: Spawn + Sync + Send,
+    T: AsyncKmsClientFactory,
+{
+    fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
+        let (send, recv) = mpsc::channel();
+
+        let _ = self
+            .sender
+            .send(AsyncKmsClientFactoryCommand::CreateClient {
+                config: kms_connection_config.clone(),
+                respond_to: send,
+            });
+        recv.recv().map_err(|e| {
+            parquet::errors::ParquetError::General(format!(
+                "Failed to receive response from KMS client factory: {e}"
+            ))
+        })?
+    }
+}
+
+/*
  * Test KMS client implementation
  */
 
@@ -170,21 +295,13 @@ impl AsyncKmsClient for TestAsyncKmsClient {
 /*
  * Test async KMS client factory implementation
  */
-pub struct TestAsyncKmsClientFactory<S>
-where
-    S: Spawn + Clone + Send + Sync + 'static,
-{
-    spawner: S,
+pub struct TestAsyncKmsClientFactory {
     inner: TestKmsClientFactory,
 }
 
-impl<S> TestAsyncKmsClientFactory<S>
-where
-    S: Spawn + Clone + Send + Sync + 'static,
-{
-    fn with_default_keys(s: S) -> Self {
+impl TestAsyncKmsClientFactory {
+    fn with_default_keys() -> Self {
         Self {
-            spawner: s,
             inner: TestKmsClientFactory::with_default_keys(),
         }
     }
@@ -198,13 +315,12 @@ where
     }
 }
 
-impl<S> KmsClientFactory for TestAsyncKmsClientFactory<S>
-where
-    S: Spawn + Clone + Send + Sync + 'static,
-{
-    fn create_client(&self, config: &KmsConnectionConfig) -> Result<KmsClientRef> {
-        let inner = Arc::new(TestAsyncKmsClient::new(self.inner.create_client(config)?));
-        Ok(Arc::new(BridgeKmsClient::new(self.spawner.clone(), inner)))
+#[async_trait::async_trait]
+impl AsyncKmsClientFactory for TestAsyncKmsClientFactory {
+    async fn create_client(&self, config: &KmsConnectionConfig) -> Result<AsyncKmsClientRef> {
+        Ok(Arc::new(TestAsyncKmsClient::new(
+            self.inner.create_client(config)?,
+        )))
     }
 }
 
@@ -223,8 +339,9 @@ where
         .build()
         .unwrap();
 
-    let crypto_factory = CryptoFactory::new(TestAsyncKmsClientFactory::with_default_keys(
-        spawner.clone(),
+    let crypto_factory = CryptoFactory::new(BridgeKmsClientFactory::new(
+        spawner,
+        TestAsyncKmsClientFactory::with_default_keys(),
     ));
     let kms_config = Arc::new(KmsConnectionConfig::default());
     let decryption_config = DecryptionConfiguration::builder().build();
@@ -257,15 +374,17 @@ where
         .build()
         .unwrap();
 
-    let write_client_factory = Arc::new(TestAsyncKmsClientFactory::with_default_keys(
-        spawner.clone(),
-    ));
-    let read_client_factory = Arc::new(TestAsyncKmsClientFactory::with_default_keys(
-        spawner.clone(),
-    ));
+    let write_client_factory = Arc::new(TestAsyncKmsClientFactory::with_default_keys());
+    let read_client_factory = Arc::new(TestAsyncKmsClientFactory::with_default_keys());
 
-    let write_crypto_factory = CryptoFactory::new(write_client_factory.clone());
-    let read_crypto_factory = CryptoFactory::new(read_client_factory.clone());
+    let write_crypto_factory = CryptoFactory::new(BridgeKmsClientFactory::new(
+        spawner.clone(),
+        write_client_factory.clone(),
+    ));
+    let read_crypto_factory = CryptoFactory::new(BridgeKmsClientFactory::new(
+        spawner.clone(),
+        read_client_factory.clone(),
+    ));
 
     let kms_config = Arc::new(KmsConnectionConfig::default());
 
@@ -364,7 +483,7 @@ impl Spawn for TokioSpawner {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn write_with_keys_and_read_with_async_kms_tokio() {
     write_with_keys_and_read_with_async_kms(TokioSpawner, round_trip_parquet_with_properties_tokio)
         .await
