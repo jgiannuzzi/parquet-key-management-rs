@@ -192,6 +192,8 @@
 //! # Ok::<(), parquet::errors::ParquetError>(())
 //! ```
 
+#[cfg(feature = "async")]
+pub mod async_kms;
 pub mod crypto_factory;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;

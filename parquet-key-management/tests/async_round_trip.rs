@@ -1,5 +1,4 @@
 use arrow_array::{ArrayRef, Float32Array, Int32Array, RecordBatch};
-use futures::future::BoxFuture;
 use futures::task::{Spawn, SpawnExt};
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
@@ -8,6 +7,10 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
+use parquet_key_management::async_kms::{
+    KmsClient as AsyncKmsClient, KmsClientFactory as AsyncKmsClientFactory,
+    KmsClientRef as AsyncKmsClientRef,
+};
 use parquet_key_management::crypto_factory::{
     CryptoFactory, DecryptionConfiguration, EncryptionConfiguration,
 };
@@ -15,64 +18,12 @@ use parquet_key_management::kms::{KmsClient, KmsClientFactory, KmsClientRef, Kms
 use parquet_key_management::test_kms::TestKmsClientFactory;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
-
-/*
- * traits
- */
-
-#[async_trait::async_trait]
-pub trait AsyncKmsClient: Send + Sync {
-    /// Wrap encryption key bytes using the KMS with the specified master key
-    async fn wrap_key(&self, key_bytes: &[u8], master_key_identifier: &str) -> Result<String>;
-
-    /// Unwrap a wrapped encryption key using the KMS with the specified master key
-    async fn unwrap_key(&self, wrapped_key: &str, master_key_identifier: &str) -> Result<Vec<u8>>;
-}
-
-pub type AsyncKmsClientRef = Arc<dyn AsyncKmsClient>;
-
-/// Trait for factories that create KMS clients
-#[async_trait::async_trait]
-pub trait AsyncKmsClientFactory: Send + Sync {
-    /// Create a new [`KmsClient`] instance using the provided configuration
-    async fn create_client(
-        &self,
-        kms_connection_config: &KmsConnectionConfig,
-    ) -> Result<AsyncKmsClientRef>;
-}
-
-#[async_trait::async_trait]
-impl<T> AsyncKmsClientFactory for Arc<T>
-where
-    T: AsyncKmsClientFactory,
-{
-    async fn create_client(
-        &self,
-        kms_connection_config: &KmsConnectionConfig,
-    ) -> Result<AsyncKmsClientRef> {
-        self.deref().create_client(kms_connection_config).await
-    }
-}
-
-#[async_trait::async_trait]
-impl<T> AsyncKmsClientFactory for T
-where
-    T: Fn(&KmsConnectionConfig) -> BoxFuture<Result<AsyncKmsClientRef>> + Send + Sync + 'static,
-{
-    async fn create_client(
-        &self,
-        kms_connection_config: &KmsConnectionConfig,
-    ) -> Result<AsyncKmsClientRef> {
-        self(kms_connection_config).await
-    }
-}
 
 /*
  * Bridge KMS client implementation

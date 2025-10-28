@@ -25,6 +25,7 @@ datafusion-common = { version = "50.0", default-features = false, features = [
     "parquet_encryption",
 ], optional = true }
 object_store = { version = "0.12.2", default-features = false, optional = true }
+futures = { version = "0.3", default-features = false, optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true }
@@ -41,6 +42,7 @@ async-fs = { version = "2" }
 
 [features]
 default = []
+async = ["dep:futures"]
 datafusion = ["dep:datafusion-execution", "dep:datafusion-common", "dep:object_store"]
 _test_utils = []
 
@@ -50,7 +52,7 @@ required-features = ["_test_utils"]
 
 [[test]]
 name = "async_round_trip"
-required-features = ["_test_utils"]
+required-features = ["_test_utils", "async"]
 
 [[test]]
 name = "integration_tests"
