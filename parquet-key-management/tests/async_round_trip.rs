@@ -12,72 +12,90 @@ use parquet_key_management::crypto_factory::{
 };
 use parquet_key_management::kms::{KmsClient, KmsClientFactory, KmsClientRef, KmsConnectionConfig};
 use parquet_key_management::test_kms::TestKmsClientFactory;
+use std::future::Future;
 use std::marker::PhantomData;
-use std::sync::mpsc as oneshot;
+use std::path::Path;
+use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
 use tempfile::TempDir;
-use tokio::sync::mpsc;
-use tokio::time::sleep;
+use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
 
-enum KmsClientCommand {
+/*
+ * traits
+ */
+
+#[async_trait::async_trait]
+pub trait AsyncKmsClient: Send + Sync {
+    /// Wrap encryption key bytes using the KMS with the specified master key
+    async fn wrap_key(&self, key_bytes: &[u8], master_key_identifier: &str) -> Result<String>;
+
+    /// Unwrap a wrapped encryption key using the KMS with the specified master key
+    async fn unwrap_key(&self, wrapped_key: &str, master_key_identifier: &str) -> Result<Vec<u8>>;
+}
+
+pub type AsyncKmsClientRef = Arc<dyn AsyncKmsClient>;
+
+/*
+ * Bridge KMS client implementation
+ */
+
+enum AsyncKmsClientCommand {
     WrapKey {
         key_bytes: Vec<u8>,
         master_key_identifier: String,
-        respond_to: oneshot::Sender<Result<String>>,
+        respond_to: mpsc::Sender<Result<String>>,
     },
     UnwrapKey {
         wrapped_key: String,
         master_key_identifier: String,
-        respond_to: oneshot::Sender<Result<Vec<u8>>>,
+        respond_to: mpsc::Sender<Result<Vec<u8>>>,
     },
 }
 
-struct TokioTestKmsClient<S: Spawn> {
-    sender: mpsc::UnboundedSender<KmsClientCommand>,
+struct BridgeKmsClient<S: Spawn> {
+    sender: tokio::sync::mpsc::UnboundedSender<AsyncKmsClientCommand>,
     _marker: PhantomData<S>,
 }
 
-impl<S> TokioTestKmsClient<S>
+impl<S> BridgeKmsClient<S>
 where
-    S: Spawn,
+    S: Spawn + Clone + Send + Sync + 'static,
 {
-    fn new(spawner: S, inner: KmsClientRef) -> Self {
-        let (sender, mut receiver) = mpsc::unbounded_channel::<KmsClientCommand>();
+    fn new(spawner: S, inner: AsyncKmsClientRef) -> Self {
+        let (sender, mut receiver) =
+            tokio::sync::mpsc::unbounded_channel::<AsyncKmsClientCommand>();
 
         spawner
+            .clone()
             .spawn(async move {
                 while let Some(cmd) = receiver.recv().await {
-                    match cmd {
-                        KmsClientCommand::WrapKey {
-                            key_bytes,
-                            master_key_identifier,
-                            respond_to,
-                        } => {
-                            println!(
-                                "TokioTestKmsClient: wrapping key for master key identifier '{}'",
-                                master_key_identifier
-                            );
-                            let result = inner.wrap_key(&key_bytes, &master_key_identifier);
-                            sleep(Duration::from_millis(1)).await;
-                            let _ = respond_to.send(result);
-                            println!("TokioTestKmsClient: finished wrapping key");
-                        }
-                        KmsClientCommand::UnwrapKey {
-                            wrapped_key,
-                            master_key_identifier,
-                            respond_to,
-                        } => {
-                            println!(
-                                "TokioTestKmsClient: unwrapping key for master key identifier '{}'",
-                                master_key_identifier
-                            );
-                            let result = inner.unwrap_key(&wrapped_key, &master_key_identifier);
-                            sleep(Duration::from_millis(1)).await;
-                            let _ = respond_to.send(result);
-                            println!("TokioTestKmsClient: finished unwrapping key");
-                        }
-                    }
+                    let inner = inner.clone();
+                    spawner
+                        .spawn(async move {
+                            match cmd {
+                                AsyncKmsClientCommand::WrapKey {
+                                    key_bytes,
+                                    master_key_identifier,
+                                    respond_to,
+                                } => {
+                                    let result =
+                                        inner.wrap_key(&key_bytes, &master_key_identifier).await;
+                                    let _ = respond_to.send(result);
+                                }
+                                AsyncKmsClientCommand::UnwrapKey {
+                                    wrapped_key,
+                                    master_key_identifier,
+                                    respond_to,
+                                } => {
+                                    let result = inner
+                                        .unwrap_key(&wrapped_key, &master_key_identifier)
+                                        .await;
+                                    let _ = respond_to.send(result);
+                                }
+                            }
+                        })
+                        .expect("Failed to spawn KMS command task");
                 }
             })
             .expect("Failed to spawn KMS client task");
@@ -89,54 +107,70 @@ where
     }
 }
 
-impl<S> KmsClient for TokioTestKmsClient<S>
+impl<S> KmsClient for BridgeKmsClient<S>
 where
     S: Spawn + Sync + Send,
 {
     fn wrap_key(&self, key_bytes: &[u8], master_key_identifier: &str) -> Result<String> {
-        let (send, recv) = oneshot::channel();
+        let (send, recv) = mpsc::channel();
 
-        let cmd = KmsClientCommand::WrapKey {
+        let _ = self.sender.send(AsyncKmsClientCommand::WrapKey {
             key_bytes: key_bytes.to_vec(),
             master_key_identifier: master_key_identifier.to_string(),
             respond_to: send,
-        };
-
-        println!("TokioTestKmsClient: sending wrap key command");
-        let _ = self.sender.send(cmd);
-        println!("TokioTestKmsClient: waiting for wrap key response");
-        let res = recv.recv().map_err(|e| {
+        });
+        recv.recv().map_err(|e| {
             parquet::errors::ParquetError::General(format!(
                 "Failed to receive response from KMS client: {e}"
             ))
-        })?;
-        println!("TokioTestKmsClient: received wrap key response");
-        res
+        })?
     }
 
     fn unwrap_key(&self, wrapped_key: &str, master_key_identifier: &str) -> Result<Vec<u8>> {
-        let (send, recv) = oneshot::channel();
+        let (send, recv) = mpsc::channel();
 
-        let cmd = KmsClientCommand::UnwrapKey {
+        let _ = self.sender.send(AsyncKmsClientCommand::UnwrapKey {
             wrapped_key: wrapped_key.to_string(),
             master_key_identifier: master_key_identifier.to_string(),
             respond_to: send,
-        };
-
-        println!("TokioTestKmsClient: sending unwrap key command");
-        let _ = self.sender.send(cmd);
-        println!("TokioTestKmsClient: waiting for unwrap key response");
-        let res = recv.recv().map_err(|e| {
+        });
+        recv.recv().map_err(|e| {
             parquet::errors::ParquetError::General(format!(
                 "Failed to receive response from KMS client: {e}"
             ))
-        })?;
-        println!("TokioTestKmsClient: received unwrap key response");
-        res
+        })?
     }
 }
 
-pub struct TokioTestKmsClientFactory<S>
+/*
+ * Test KMS client implementation
+ */
+
+struct TestAsyncKmsClient {
+    inner: KmsClientRef,
+}
+
+impl TestAsyncKmsClient {
+    fn new(inner: KmsClientRef) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait::async_trait]
+impl AsyncKmsClient for TestAsyncKmsClient {
+    async fn wrap_key(&self, key_bytes: &[u8], master_key_identifier: &str) -> Result<String> {
+        self.inner.wrap_key(key_bytes, master_key_identifier)
+    }
+
+    async fn unwrap_key(&self, wrapped_key: &str, master_key_identifier: &str) -> Result<Vec<u8>> {
+        self.inner.unwrap_key(wrapped_key, master_key_identifier)
+    }
+}
+
+/*
+ * Test async KMS client factory implementation
+ */
+pub struct TestAsyncKmsClientFactory<S>
 where
     S: Spawn + Clone + Send + Sync + 'static,
 {
@@ -144,7 +178,7 @@ where
     inner: TestKmsClientFactory,
 }
 
-impl<S> TokioTestKmsClientFactory<S>
+impl<S> TestAsyncKmsClientFactory<S>
 where
     S: Spawn + Clone + Send + Sync + 'static,
 {
@@ -164,48 +198,41 @@ where
     }
 }
 
-impl<S> KmsClientFactory for TokioTestKmsClientFactory<S>
+impl<S> KmsClientFactory for TestAsyncKmsClientFactory<S>
 where
     S: Spawn + Clone + Send + Sync + 'static,
 {
     fn create_client(&self, config: &KmsConnectionConfig) -> Result<KmsClientRef> {
-        let inner_client = self.inner.create_client(config)?;
-        Ok(Arc::new(TokioTestKmsClient::new(
-            self.spawner.clone(),
-            inner_client,
-        )))
+        let inner = Arc::new(TestAsyncKmsClient::new(self.inner.create_client(config)?));
+        Ok(Arc::new(BridgeKmsClient::new(self.spawner.clone(), inner)))
     }
 }
 
-#[derive(Clone)]
-struct TokioSpawner;
-impl Spawn for TokioSpawner {
-    fn spawn_obj(
-        &self,
-        future: futures::task::FutureObj<'static, ()>,
-    ) -> std::result::Result<(), futures::task::SpawnError> {
-        tokio::task::spawn(future);
-        Ok(())
-    }
-}
+/*
+ * Test functions
+ */
 
-#[tokio::test]
-async fn write_with_keys_and_read_with_async_kms() {
+async fn write_with_keys_and_read_with_async_kms<S, F, Fut>(spawner: S, round_trip_fn: F)
+where
+    S: Spawn + Clone + Send + Sync + 'static,
+    F: Fn(FileEncryptionProperties, FileDecryptionProperties) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
     let footer_key = b"0123456789012345";
     let encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
         .build()
         .unwrap();
 
-    let crypto_factory =
-        CryptoFactory::new(TokioTestKmsClientFactory::with_default_keys(TokioSpawner));
+    let crypto_factory = CryptoFactory::new(TestAsyncKmsClientFactory::with_default_keys(
+        spawner.clone(),
+    ));
     let kms_config = Arc::new(KmsConnectionConfig::default());
     let decryption_config = DecryptionConfiguration::builder().build();
     let decryption_properties = crypto_factory
         .file_decryption_properties(kms_config, decryption_config)
         .unwrap();
 
-    let result =
-        round_trip_parquet_with_properties(encryption_properties, decryption_properties).await;
+    let result = round_trip_fn(encryption_properties, decryption_properties).await;
 
     match result {
         Ok(_) => panic!("Expected an error when reading encrypted Parquet that doesn't use a KMS"),
@@ -216,8 +243,12 @@ async fn write_with_keys_and_read_with_async_kms() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn multi_file_round_trip_with_async_kms() {
+async fn multi_file_round_trip_with_async_kms<S, F, Fut>(spawner: S, round_trip_fn: F)
+where
+    S: Spawn + Clone + Send + Sync + 'static,
+    F: Fn(FileEncryptionProperties, FileDecryptionProperties) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
     let encryption_config = EncryptionConfiguration::builder("kf".into())
         .set_double_wrapping(true)
         .add_column_key("kc1".into(), vec!["x".into()])
@@ -226,8 +257,12 @@ async fn multi_file_round_trip_with_async_kms() {
         .build()
         .unwrap();
 
-    let write_client_factory = Arc::new(TokioTestKmsClientFactory::with_default_keys(TokioSpawner));
-    let read_client_factory = Arc::new(TokioTestKmsClientFactory::with_default_keys(TokioSpawner));
+    let write_client_factory = Arc::new(TestAsyncKmsClientFactory::with_default_keys(
+        spawner.clone(),
+    ));
+    let read_client_factory = Arc::new(TestAsyncKmsClientFactory::with_default_keys(
+        spawner.clone(),
+    ));
 
     let write_crypto_factory = CryptoFactory::new(write_client_factory.clone());
     let read_crypto_factory = CryptoFactory::new(read_client_factory.clone());
@@ -244,7 +279,7 @@ async fn multi_file_round_trip_with_async_kms() {
             .file_decryption_properties(kms_config.clone(), decryption_config)
             .unwrap();
 
-        round_trip_parquet_with_properties(encryption_properties, decryption_properties)
+        round_trip_fn(encryption_properties, decryption_properties)
             .await
             .unwrap()
     }
@@ -253,10 +288,20 @@ async fn multi_file_round_trip_with_async_kms() {
     assert_eq!(read_client_factory.keys_unwrapped(), 3);
 }
 
-async fn round_trip_parquet_with_properties(
+async fn round_trip_parquet_with_properties<W, R, CFut, OFut, CFn, OFn>(
+    create_fn: CFn,
+    open_fn: OFn,
     encryption_properties: FileEncryptionProperties,
     decryption_properties: FileDecryptionProperties,
-) -> Result<()> {
+) -> Result<()>
+where
+    W: AsyncWrite + Send + Unpin,
+    R: AsyncRead + AsyncSeek + Send + Unpin + 'static,
+    CFn: Fn(&Path) -> CFut,
+    OFn: Fn(&Path) -> OFut,
+    CFut: Future<Output = Result<W>>,
+    OFut: Future<Output = Result<R>>,
+{
     let temp_dir = TempDir::new()?;
     let file_path = temp_dir.path().join("test_file.parquet");
 
@@ -272,7 +317,7 @@ async fn round_trip_parquet_with_properties(
     ])?;
 
     {
-        let file = tokio::fs::File::create(&file_path).await?;
+        let file = create_fn(&file_path).await?;
 
         let writer_properties = WriterProperties::builder()
             .with_file_encryption_properties(encryption_properties)
@@ -288,7 +333,7 @@ async fn round_trip_parquet_with_properties(
     let reader_options =
         ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
-    let file = tokio::fs::File::open(&file_path).await?;
+    let file = open_fn(&file_path).await?;
 
     let builder = ParquetRecordBatchStreamBuilder::new_with_options(file, reader_options).await?;
     let stream = builder.build()?;
@@ -297,4 +342,166 @@ async fn round_trip_parquet_with_properties(
     assert_eq!(results[0], write_batch);
 
     Ok(())
+}
+
+/*
+ * tokio tests
+ */
+
+#[derive(Clone)]
+struct TokioSpawner;
+impl Spawn for TokioSpawner {
+    fn spawn_obj(
+        &self,
+        future: futures::task::FutureObj<'static, ()>,
+    ) -> std::result::Result<(), futures::task::SpawnError> {
+        assert_eq!(
+            tokio::runtime::RuntimeFlavor::MultiThread,
+            tokio::runtime::Handle::current().runtime_flavor()
+        );
+        tokio::task::spawn(future);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn write_with_keys_and_read_with_async_kms_tokio() {
+    write_with_keys_and_read_with_async_kms(TokioSpawner, round_trip_parquet_with_properties_tokio)
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn multi_file_round_trip_with_async_kms_tokio() {
+    multi_file_round_trip_with_async_kms(TokioSpawner, round_trip_parquet_with_properties_tokio)
+        .await
+}
+
+async fn round_trip_parquet_with_properties_tokio(
+    encryption_properties: FileEncryptionProperties,
+    decryption_properties: FileDecryptionProperties,
+) -> Result<()> {
+    round_trip_parquet_with_properties(
+        |path| {
+            let path = path.to_owned();
+            async move { Ok(tokio::fs::File::create(path).await?) }
+        },
+        |path| {
+            let path = path.to_owned();
+            async move { Ok(tokio::fs::File::open(path).await?) }
+        },
+        encryption_properties,
+        decryption_properties,
+    )
+    .await
+}
+
+/*
+ * async-std tests
+ */
+
+#[derive(Clone)]
+struct AsyncStdSpawner;
+impl Spawn for AsyncStdSpawner {
+    fn spawn_obj(
+        &self,
+        future: futures::task::FutureObj<'static, ()>,
+    ) -> std::result::Result<(), futures::task::SpawnError> {
+        async_std::task::spawn(future);
+        Ok(())
+    }
+}
+
+#[test]
+fn write_with_keys_and_read_with_async_kms_async_std() {
+    async_std::task::block_on(async {
+        write_with_keys_and_read_with_async_kms(
+            AsyncStdSpawner,
+            round_trip_parquet_with_properties_async_std,
+        )
+        .await
+    })
+}
+
+#[test]
+fn multi_file_round_trip_with_async_kms_async_std() {
+    async_std::task::block_on(async {
+        multi_file_round_trip_with_async_kms(
+            AsyncStdSpawner,
+            round_trip_parquet_with_properties_async_std,
+        )
+        .await
+    })
+}
+
+async fn round_trip_parquet_with_properties_async_std(
+    encryption_properties: FileEncryptionProperties,
+    decryption_properties: FileDecryptionProperties,
+) -> Result<()> {
+    round_trip_parquet_with_properties(
+        |path| {
+            let path = path.to_owned();
+            async move { Ok(async_std::fs::File::create(path).await?.compat()) }
+        },
+        |path| {
+            let path = path.to_owned();
+            async move { Ok(async_std::fs::File::open(path).await?.compat_write()) }
+        },
+        encryption_properties,
+        decryption_properties,
+    )
+    .await
+}
+
+/*
+ * smol tests
+ */
+
+#[derive(Clone)]
+struct SmolSpawner;
+impl Spawn for SmolSpawner {
+    fn spawn_obj(
+        &self,
+        future: futures::task::FutureObj<'static, ()>,
+    ) -> std::result::Result<(), futures::task::SpawnError> {
+        smol::spawn(future).detach();
+        Ok(())
+    }
+}
+
+#[test]
+fn write_with_keys_and_read_with_async_kms_smol() {
+    smol::block_on(async {
+        write_with_keys_and_read_with_async_kms(
+            SmolSpawner,
+            round_trip_parquet_with_properties_smol,
+        )
+        .await
+    })
+}
+
+#[test]
+fn wmulti_file_round_trip_with_async_kms_smol() {
+    smol::block_on(async {
+        multi_file_round_trip_with_async_kms(SmolSpawner, round_trip_parquet_with_properties_smol)
+            .await
+    })
+}
+
+async fn round_trip_parquet_with_properties_smol(
+    encryption_properties: FileEncryptionProperties,
+    decryption_properties: FileDecryptionProperties,
+) -> Result<()> {
+    round_trip_parquet_with_properties(
+        |path| {
+            let path = path.to_owned();
+            async move { Ok(async_fs::File::create(path).await?.compat()) }
+        },
+        |path| {
+            let path = path.to_owned();
+            async move { Ok(async_fs::File::open(path).await?.compat_write()) }
+        },
+        encryption_properties,
+        decryption_properties,
+    )
+    .await
 }
