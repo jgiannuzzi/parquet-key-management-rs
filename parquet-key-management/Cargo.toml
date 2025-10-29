@@ -26,6 +26,7 @@ datafusion-common = { version = "50.0", default-features = false, features = [
 ], optional = true }
 object_store = { version = "0.12.2", default-features = false, optional = true }
 futures = { version = "0.3", default-features = false, optional = true }
+tokio = { version = "1.0", default-features = false, features = ["sync"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true }
@@ -42,7 +43,7 @@ async-fs = { version = "2" }
 
 [features]
 default = []
-async = ["dep:futures"]
+async = ["dep:futures", "dep:tokio"]
 datafusion = ["dep:datafusion-execution", "dep:datafusion-common", "dep:object_store"]
 _test_utils = []
 

@@ -1,6 +1,8 @@
 //! Types for integrating with a Key Management Server to use with Parquet Modular Encryption
 //! in an asynchronous context.
 
+pub(crate) mod bridge;
+
 use crate::kms::KmsConnectionConfig;
 use futures::future::BoxFuture;
 use parquet::errors::Result;

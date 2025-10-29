@@ -1,10 +1,14 @@
 //! The key-management tools API for building file encryption and decryption properties
 //! that work with a Key Management Server.
 
+#[cfg(feature = "async")]
+use crate::async_kms::{bridge::BridgeKmsClientFactory, KmsClientFactory as AsyncKmsClientFactory};
 use crate::key_unwrapper::KeyUnwrapper;
 use crate::key_wrapper::KeyWrapper;
 use crate::kms::{KmsClientFactory, KmsConnectionConfig};
 use crate::kms_manager::KmsManager;
+#[cfg(feature = "async")]
+use futures::task::Spawn;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
@@ -294,6 +298,20 @@ impl CryptoFactory {
     {
         CryptoFactory {
             kms_manager: Arc::new(KmsManager::new(kms_client_factory)),
+        }
+    }
+
+    #[cfg(feature = "async")]
+    /// Create a new [`CryptoFactory`], providing a spawner and a factory function
+    /// for creating asynchronous KMS clients
+    pub fn new_async<S, T>(spawner: S, kms_client_factory: T) -> Self
+    where
+        S: Spawn + Clone + Sync + Send + 'static,
+        T: AsyncKmsClientFactory + 'static,
+    {
+        let bridge_factory = BridgeKmsClientFactory::new(spawner, kms_client_factory);
+        CryptoFactory {
+            kms_manager: Arc::new(KmsManager::new(bridge_factory)),
         }
     }
 
