@@ -1,5 +1,5 @@
 [workspace]
-members = ["parquet-key-management", "generate-test-files"]
+members = ["parquet-key-management", "generate-test-files", "playground"]
 resolver = "2"
 
 [workspace.package]
